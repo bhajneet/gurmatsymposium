@@ -13,12 +13,19 @@ STEP 1: Download the right file
 -----------------------------------------------------------
 Pick ONE file for the computer that will run the show:
 
-  macOS, Apple Silicon (M1/M2/M3/M4):  GurmatSangeet-macOS-AppleSilicon
-  macOS, Intel:                        GurmatSangeet-macOS-Intel
+  macOS, Apple Silicon (M1/M2/M3/M4):  GurmatSangeet-macOS-AppleSilicon.zip
+  macOS, Intel:                        GurmatSangeet-macOS-Intel.zip
   Windows, 64-bit (most PCs):          GurmatSangeet-Windows-x64.exe
   Windows, ARM64:                      GurmatSangeet-Windows-ARM64.exe
 
-That's it -- it's a single file, nothing to unzip or install.
+The macOS downloads are a .zip with exactly one file inside --
+that's not for compression, it's because web browsers strip the
+"this file is allowed to run" permission from anything they
+download, and a .zip is one of the few formats that survives
+that intact. Unzip it (double-click the .zip) and you're left
+with one plain app file, nothing else. Windows .exe files don't
+have this problem, so they download ready to run as-is.
+
 Put it in a folder you can write to (like Desktop or Documents);
 the app saves a couple of small files next to itself as you use it.
 
@@ -26,10 +33,12 @@ the app saves a couple of small files next to itself as you use it.
 STEP 2: Run it
 -----------------------------------------------------------
 macOS:
-  Double-click the file. macOS will warn it's from an
-  unidentified developer -- right-click (or Control-click) the
-  file, choose "Open", then confirm "Open" in the dialog. You
-  only need to do this once.
+  Double-click the .zip to unzip it (if your browser hasn't
+  already done this automatically), then double-click the
+  extracted file. macOS will warn it's from an unidentified
+  developer -- right-click (or Control-click) the file, choose
+  "Open", then confirm "Open" in the dialog. You only need to do
+  this once.
 
 Windows:
   Double-click the .exe file. Windows SmartScreen may warn it's

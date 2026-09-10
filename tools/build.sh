@@ -1,6 +1,13 @@
 #!/bin/bash
 # Rebuilds style.css from index.html, then cross-compiles the single-file
 # Go binaries for macOS (Apple Silicon + Intel) and Windows (x64 + ARM64).
+#
+# The macOS binaries get zipped (one binary per zip, nothing else inside)
+# because browsers strip the executable bit from any file they download --
+# a raw downloaded binary is never runnable no matter how it's named. Zip
+# is one of the few download formats whose unzip restores Unix permission
+# bits, so double-click-to-run keeps working once the user unzips it.
+# Windows .exe files don't have this problem, so they ship raw.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -32,5 +39,10 @@ build windows arm64 "${APP}-Windows-ARM64.exe"
 chmod +x build/${APP}-macOS-AppleSilicon build/${APP}-macOS-Intel
 
 echo ""
-echo "Done. Binaries in build/:"
+echo "Zipping macOS binaries (preserves the executable bit through download)..."
+( cd build && zip -q "${APP}-macOS-AppleSilicon.zip" "${APP}-macOS-AppleSilicon" && rm "${APP}-macOS-AppleSilicon" )
+( cd build && zip -q "${APP}-macOS-Intel.zip" "${APP}-macOS-Intel" && rm "${APP}-macOS-Intel" )
+
+echo ""
+echo "Done. Files in build/:"
 ls -la build/

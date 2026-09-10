@@ -37,10 +37,15 @@ jobs:
             https://github.com/tailwindlabs/tailwindcss/releases/download/v3.4.17/tailwindcss-linux-x64
           chmod +x tools/tailwindcss-v3
 
+      - name: Ensure zip is available (build.sh zips the macOS binaries)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip
+
       - name: Run tests
         run: go test ./...
 
-      - name: Build (compiles CSS, then cross-compiles all 4 binaries)
+      - name: Build (compiles CSS, cross-compiles all 4 binaries, zips the macOS ones)
         run: ./tools/build.sh
 
       - name: Upload binaries as a workflow artifact
@@ -55,8 +60,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "${{ inputs.version }}" \
-            build/GurmatSangeet-macOS-AppleSilicon \
-            build/GurmatSangeet-macOS-Intel \
+            build/GurmatSangeet-macOS-AppleSilicon.zip \
+            build/GurmatSangeet-macOS-Intel.zip \
             build/GurmatSangeet-Windows-x64.exe \
             build/GurmatSangeet-Windows-ARM64.exe \
             --title "${{ inputs.version }}" \
