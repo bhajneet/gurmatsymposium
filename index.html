@@ -1,0 +1,1126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gurmat Symposium</title>
+  
+  <!-- Compiled Tailwind CSS (built offline via the Tailwind standalone CLI, no CDN/runtime JIT) -->
+  <link rel="stylesheet" href="/style.css">
+
+  <!-- Fonts: served locally by the bundled Go server, no Google Fonts dependency -->
+  <style>
+    @font-face {
+      font-family: 'Noto Sans';
+      font-style: normal;
+      font-weight: 100 900;
+      font-display: swap;
+      src: url('/fonts/notosans-latin.woff2') format('woff2');
+      unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+    }
+    @font-face {
+      font-family: 'Noto Sans';
+      font-style: normal;
+      font-weight: 100 900;
+      font-display: swap;
+      src: url('/fonts/notosans-latinext.woff2') format('woff2');
+      unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+    }
+    @font-face {
+      font-family: 'Noto Sans Gurmukhi';
+      font-style: normal;
+      font-weight: 100 900;
+      font-display: swap;
+      src: url('/fonts/notosansgurmukhi-gurmukhi.woff2') format('woff2');
+      unicode-range: U+0951-0952, U+0964-0965, U+0A01-0A76, U+200C-200D, U+20B9, U+25CC, U+262C, U+A830-A839;
+    }
+  </style>
+
+  <style>
+    body {
+      font-family: 'Noto Sans', 'Noto Sans Gurmukhi', sans-serif;
+      font-optical-sizing: auto;
+      font-weight: 550;
+      font-style: normal;
+      font-variation-settings: "width" 65;
+    }
+    
+    /* Transparent background support for OBS overlay mode */
+    body.mode-obs {
+      background-color: transparent !important;
+    }
+
+    /* On OBS, idle hides the entire header (it's a broadcast overlay). */
+    body.mode-obs.user-idle header {
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.5s ease-out;
+    }
+    body.mode-obs header {
+      transition: opacity 0.2s ease-in;
+    }
+
+    /* On other screens, idle hides only the "Switch Screen" button; the
+       header/title stays so people can still see what's on screen. */
+    .user-idle .autohide-ui {
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.5s ease-out;
+    }
+    .autohide-ui {
+      transition: opacity 0.2s ease-in;
+    }
+
+    /* The header is shared across all screens, so its own "zoom 2x under
+       720px" rule is scoped to when Judge is actually the active screen --
+       otherwise this would also zoom the header on Controller/OBS. */
+    @media (max-width: 719px) {
+      /* Tailwind's text-sm/text-xs utilities also set a *fixed* px
+         line-height alongside font-size. Bumping only font-size here left
+         that frozen line-box too short for the larger glyphs, clipping the
+         bottom of the text. A unitless line-height scales with whatever
+         font-size is active, so this can't happen regardless of the exact
+         zoom values above. */
+      body.mode-judge #current-screen-label {
+        font-size: 1.75rem !important;
+        line-height: 1.3 !important;
+      }
+      body.mode-judge header button.autohide-ui {
+        font-size: 1.5rem !important;
+        line-height: 1.3 !important;
+      }
+    }
+  </style>
+
+  <script>
+    // State initialization
+    let performers = [];
+    let activeId = null;
+    let currentScreen = 'controller';
+    let currentFileName = 'Gurmat Sangeet Broadcast System';
+
+    // Helper: Check if value is empty, dash, or blank
+    function isEmptyVal(val) {
+      if (!val) return true;
+      const trimmed = String(val).trim();
+      return trimmed === '' || trimmed === '—' || trimmed === '–' || trimmed === '-';
+    }
+
+    // Helper: escape text before it's interpolated into innerHTML, so a CSV
+    // cell containing "<" or "&" can't break rendering.
+    function escapeHtml(str) {
+      if (str === null || str === undefined) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    // Helper: Format Taal & Column G Note
+    function formatTaalDisplay(taalRaw, noteRaw) {
+      const cleanTaal = isEmptyVal(taalRaw) ? '' : String(taalRaw).trim();
+      const cleanNote = isEmptyVal(noteRaw) ? '' : String(noteRaw).trim();
+
+      if (cleanTaal && cleanNote) {
+        return `${cleanTaal} – ${cleanNote}`;
+      } else if (cleanTaal) {
+        return cleanTaal; // No em dash when there's no note
+      } else if (cleanNote) {
+        return cleanNote; // No em dash when there's no taal
+      }
+      return '';
+    }
+
+    // Helper: packs an ordered list of text chunks into exactly
+    // `targetCount` contiguous groups (never reordering them -- that would
+    // change reading order), choosing group boundaries to minimize the
+    // longest resulting group. This is the classic "split an array into k
+    // contiguous parts minimizing the largest part" problem, solved here
+    // with a small DP (the input is always a handful of lines, so an O(n^2 k)
+    // DP is effectively instant). Used to compress several short shabad
+    // clauses onto fewer, denser OBS lines -- e.g. 4 short clauses become 2
+    // lines of 2, or 1 long clause + 2 short ones become [long] + [short+short]
+    // rather than splitting evenly by position.
+    function packLinesForDisplay(lines, targetCount) {
+      const n = lines.length;
+      const k = Math.max(1, Math.min(targetCount, n));
+      if (n <= 1 || k >= n) return lines.slice();
+
+      const prefixLen = [0];
+      for (const line of lines) prefixLen.push(prefixLen[prefixLen.length - 1] + line.length);
+      const groupLen = (start, end) => prefixLen[end] - prefixLen[start];
+
+      const INF = Infinity;
+      // dp[i][g] = minimal possible "longest group" when packing lines[0..i)
+      // into g groups; choice[i][g] = the start index of that last group.
+      const dp = Array.from({ length: n + 1 }, () => Array(k + 1).fill(INF));
+      const choice = Array.from({ length: n + 1 }, () => Array(k + 1).fill(-1));
+      dp[0][0] = 0;
+
+      for (let i = 1; i <= n; i++) {
+        for (let g = 1; g <= Math.min(i, k); g++) {
+          for (let j = g - 1; j < i; j++) {
+            if (dp[j][g - 1] === INF) continue;
+            const candidate = Math.max(dp[j][g - 1], groupLen(j, i));
+            if (candidate < dp[i][g]) {
+              dp[i][g] = candidate;
+              choice[i][g] = j;
+            }
+          }
+        }
+      }
+
+      const groups = [];
+      let i = n, g = k;
+      while (g > 0) {
+        const j = choice[i][g];
+        groups.unshift(lines.slice(j, i).join(' '));
+        i = j;
+        g--;
+      }
+      return groups;
+    }
+
+    // Helper: Split Shabad on "॥" cleanly for OBS Right-Aligned Multi-Line Display
+    function formatShabadForOBS(shabad) {
+      if (!shabad || isEmptyVal(shabad)) return `<div>—</div>`;
+
+      // Preserve "॥ ਰਹਾਉ ॥" as a single token so it doesn't split between 'ਰਹਾਉ' and '॥'
+      let text = String(shabad).trim().replace(/॥\s*ਰਹਾਉ\s*॥/g, '॥ਰਹਾਉ॥');
+
+      // Match lines ending with double danda markers
+      let matches = text.match(/[^॥]+॥(?:\d+॥)?(?:ਰਹਾਉ॥)?/g);
+
+      if (!matches || matches.length === 0) {
+        return `<div>${escapeHtml(text)}</div>`;
+      }
+
+      const lines = matches.map((line) => line.trim().replace(/॥ਰਹਾਉ॥/g, ' ॥ ਰਹਾਉ ॥').trim());
+
+      // Fold any "marker-only" line (just a verse number and/or ਰਹਾਉ, with
+      // no real words -- e.g. a lone "੧॥ ਰਹਾਉ ॥") into the previous line
+      // instead of letting it stand alone as its own line.
+      const merged = [];
+      for (const line of lines) {
+        const stripped = line.replace(/[॥੦-੯\s]/g, '');
+        const isMarkerOnly = stripped === '' || stripped === 'ਰਹਾਉ';
+        if (isMarkerOnly && merged.length > 0) {
+          merged[merged.length - 1] += ' ' + line;
+        } else {
+          merged.push(line);
+        }
+      }
+
+      // Compress onto roughly half as many lines (rounded up), packed to
+      // balance line length rather than just pairing by position.
+      const targetCount = Math.max(1, Math.ceil(merged.length / 2));
+      const packed = packLinesForDisplay(merged, targetCount);
+
+      return packed.map((line) => `<div>${escapeHtml(line)}</div>`).join('');
+    }
+
+    // RFC 4180 compliant CSV Parser
+    function parseCSV(text) {
+      // Strip UTF-8 BOM if present
+      if (text.startsWith('\uFEFF')) {
+        text = text.slice(1);
+      }
+
+      const rows = [];
+      let currentRow = [];
+      let currentVal = '';
+      let inQuotes = false;
+
+      for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        const nextChar = text[i + 1];
+
+        if (inQuotes) {
+          if (char === '"') {
+            if (nextChar === '"') {
+              // Escaped quote inside quoted field
+              currentVal += '"';
+              i++;
+            } else {
+              // End of quoted field
+              inQuotes = false;
+            }
+          } else {
+            currentVal += char;
+          }
+        } else {
+          if (char === '"') {
+            inQuotes = true;
+          } else if (char === ',') {
+            currentRow.push(currentVal.trim());
+            currentVal = '';
+          } else if (char === '\r' || char === '\n') {
+            if (char === '\r' && nextChar === '\n') {
+              i++;
+            }
+            currentRow.push(currentVal.trim());
+            if (currentRow.some(cell => cell.length > 0)) {
+              rows.push(currentRow);
+            }
+            currentRow = [];
+            currentVal = '';
+          } else {
+            currentVal += char;
+          }
+        }
+      }
+      if (currentVal !== '' || currentRow.length > 0) {
+        currentRow.push(currentVal.trim());
+        if (currentRow.some(cell => cell.length > 0)) {
+          rows.push(currentRow);
+        }
+      }
+      return rows;
+    }
+
+    // Parses raw CSV text into performer objects. Shared by the manual
+    // "Import CSV" file picker and the startup auto-import path so both
+    // stay identical instead of drifting apart.
+    function buildPerformersFromCSV(text) {
+      const rows = parseCSV(text);
+      if (rows.length === 0) return [];
+
+      // Map columns by header name (case-insensitive keyword match) so the
+      // importer tolerates reordered/renamed columns instead of assuming
+      // a fixed position. Falls back to the current export's column order
+      // (Group, Participant(s), Tabla accompaniment, Performing, Raag, Taal, Notes)
+      // if a header can't be matched.
+      const header = (rows[0] || []).map(h => String(h || '').toLowerCase());
+      function findCol(keywords, fallbackIndex) {
+        for (let i = 0; i < header.length; i++) {
+          if (keywords.some(k => header[i].includes(k))) return i;
+        }
+        return fallbackIndex;
+      }
+      const colGroup = findCol(['group'], 0);
+      const colName = findCol(['participant'], 1);
+      const colTabla = findCol(['tabla'], 2);
+      const colShabad = findCol(['perform', 'shabad'], 3);
+      const colRaag = findCol(['raag'], 4);
+      const colTaal = findCol(['taal'], 5);
+      const colNote = findCol(['note'], 6);
+
+      const imported = [];
+      let dataRowIndex = 0;
+
+      for (let i = 1; i < rows.length; i++) {
+        const parts = rows[i];
+        if (!parts || !parts.some(cell => cell && cell.trim())) continue;
+
+        dataRowIndex++; // Increment data row counter (1, 2, 3...)
+
+        // Determine Group letter (A, B, C) from values like "A (6-10)"
+        const groupRaw = parts[colGroup] || 'A';
+        const groupMatch = groupRaw.match(/([A-Z])/i);
+        const groupLetter = groupMatch ? groupMatch[1].toUpperCase() : 'A';
+
+        // Code calculation: Group Letter + Row Index (e.g. A1, A2 ... C87)
+        const generatedCode = groupLetter + dataRowIndex;
+
+        // Clean participant names: strip age in parentheses e.g. (8)
+        const rawParticipants = parts[colName] || 'Participant';
+        const cleanedParticipants = rawParticipants.replace(/\s*\(\s*\d+[^)]*\)/g, '').trim();
+
+        imported.push({
+          id: 'p_' + Date.now() + '_' + i,
+          code: generatedCode,
+          group: groupRaw,
+          name: cleanedParticipants,
+          shabad: parts[colShabad] || '—',
+          raag: parts[colRaag] || '',
+          taal: parts[colTaal] || '',
+          taalNote: parts[colNote] || '',
+          tabla: parts[colTabla] || '',
+          done: false
+        });
+      }
+
+      return imported;
+    }
+
+    function cleanCSVFileName(name) {
+      return name.replace(/ - Programming\.csv$/i, '').replace(/\.csv$/i, '');
+    }
+
+    async function handleCSVImport(event) {
+      const file = event.target.files[0];
+      // Reset the input immediately so selecting the same file again still
+      // fires 'change'; the file reference above is already captured.
+      event.target.value = '';
+      if (!file) return;
+
+      const authorized = await requireAuthorization();
+      if (!authorized) return;
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const imported = buildPerformersFromCSV(e.target.result);
+        if (imported.length === 0) return;
+
+        currentFileName = cleanCSVFileName(file.name);
+        updateFileNameHeader();
+        performers = imported;
+        // Deliberately leave no one selected -- the operator may want to
+        // randomize the order first, then pick who's actually up.
+        activeId = null;
+        saveStateToServer();
+        updateDisplays();
+      };
+      reader.readAsText(file);
+    }
+
+    // If exactly one .csv file sits next to the executable and no roster
+    // has been loaded yet, import it automatically -- lets an organizer
+    // just drop the day's CSV alongside the app instead of clicking
+    // through Import CSV. Never overwrites an existing roster, and (unlike
+    // the manual Import CSV button) doesn't prompt for a password since
+    // this only ever fires once, at startup, on an empty roster.
+    async function tryAutoImportCSV() {
+      if (performers.length > 0) return;
+
+      let data;
+      try {
+        const res = await fetch('/api/auto-csv', { cache: 'no-store' });
+        data = await res.json();
+      } catch (e) {
+        console.warn('Could not check for an auto-import CSV:', e);
+        return;
+      }
+      if (!data || !data.available) return;
+
+      const imported = buildPerformersFromCSV(data.content);
+      if (imported.length === 0) return;
+
+      currentFileName = cleanCSVFileName(data.filename || '');
+      updateFileNameHeader();
+      performers = imported;
+      activeId = null;
+      saveStateToServer();
+      updateDisplays();
+    }
+
+    function updateFileNameHeader() {
+      const labelEl = document.getElementById('current-screen-label');
+      if (labelEl) {
+        let cleanName = currentFileName.replace(/ - Programming\.csv$/i, '').replace(/\.csv$/i, '');
+        labelEl.innerText = cleanName || 'Gurmat Sangeet Broadcast System';
+      }
+    }
+
+    // ---- Server-side persistence & cross-device sync ----
+    //
+    // State lives in a JSON file the Go server keeps next to the
+    // executable, not in browser localStorage. localStorage is scoped per
+    // browser *and* per port -- since the server picks a random port every
+    // launch, and OBS's embedded browser is a completely separate process
+    // from the Controller's browser anyway, localStorage could never really
+    // sync anything across screens or survive a restart. Every screen polls
+    // the server instead, which fixes both problems at once.
+
+    let lastKnownStateJSON = null;
+
+    function currentStateJSON() {
+      return JSON.stringify({ performers, activeId, fileName: currentFileName });
+    }
+
+    async function saveStateToServer() {
+      const json = currentStateJSON();
+      lastKnownStateJSON = json; // avoid the next poll re-rendering our own write
+      try {
+        await fetch('/api/state', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: json
+        });
+      } catch (e) {
+        console.warn('Could not save state to server:', e);
+      }
+    }
+
+    async function pollState() {
+      try {
+        const res = await fetch('/api/state', { cache: 'no-store' });
+        const text = await res.text();
+        if (text === lastKnownStateJSON) return; // nothing changed
+        lastKnownStateJSON = text;
+
+        const parsed = JSON.parse(text);
+        performers = Array.isArray(parsed.performers) ? parsed.performers : [];
+        // "No one selected" (activeId null, or pointing at a performer that
+        // no longer exists) is a valid, deliberate state -- never fall back
+        // to auto-picking the first performer.
+        activeId = performers.some(p => p.id === parsed.activeId) ? parsed.activeId : null;
+        currentFileName = parsed.fileName || 'Gurmat Sangeet Broadcast System';
+
+        updateFileNameHeader();
+        updateDisplays();
+      } catch (e) {
+        console.warn('Could not load state from server:', e);
+      }
+    }
+
+    function setActivePerformer(id) {
+      activeId = id;
+      saveStateToServer();
+      updateDisplays();
+    }
+
+    function togglePerformerDone(id) {
+      const performer = performers.find(p => p.id === id);
+      if (!performer) return;
+      performer.done = !performer.done;
+      saveStateToServer();
+      updateDisplays();
+    }
+
+    // ---- Password gate for destructive actions (Import CSV / Randomize) ----
+    //
+    // The server always keeps a (possibly empty) plaintext password file
+    // next to the executable, so this always prompts. If no one has ever
+    // set a password, the file is blank -- submitting the prompt with
+    // nothing typed matches a blank file and proceeds.
+
+    async function verifyPassword(password) {
+      try {
+        const res = await fetch('/api/verify-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password })
+        });
+        const data = await res.json();
+        return !!data.ok;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    // Always shows the password modal and resolves true/false once the
+    // user confirms with the correct password (blank matches a blank
+    // password file) or cancels.
+    async function requireAuthorization() {
+      return new Promise((resolve) => {
+        const overlay = document.getElementById('modal-password');
+        const input = document.getElementById('password-input');
+        const errorEl = document.getElementById('password-error');
+        const confirmBtn = document.getElementById('password-confirm');
+        const cancelBtn = document.getElementById('password-cancel');
+
+        input.value = '';
+        errorEl.classList.add('hidden');
+        overlay.classList.remove('hidden');
+        setTimeout(() => input.focus(), 0);
+
+        function cleanup(result) {
+          overlay.classList.add('hidden');
+          confirmBtn.removeEventListener('click', onConfirm);
+          cancelBtn.removeEventListener('click', onCancel);
+          input.removeEventListener('keydown', onKeydown);
+          resolve(result);
+        }
+
+        async function onConfirm() {
+          confirmBtn.disabled = true;
+          const ok = await verifyPassword(input.value);
+          confirmBtn.disabled = false;
+          if (ok) {
+            cleanup(true);
+          } else {
+            errorEl.classList.remove('hidden');
+            input.value = '';
+            input.focus();
+          }
+        }
+        function onCancel() { cleanup(false); }
+        function onKeydown(e) {
+          if (e.key === 'Enter') onConfirm();
+          if (e.key === 'Escape') onCancel();
+        }
+
+        confirmBtn.addEventListener('click', onConfirm);
+        cancelBtn.addEventListener('click', onCancel);
+        input.addEventListener('keydown', onKeydown);
+      });
+    }
+
+    // ---- Randomize: shuffle within each consecutive group segment ----
+    //
+    // The roster is a sequence of consecutive blocks by group letter (e.g.
+    // all of A, then all of B, then all of C). Randomize shuffles the
+    // performers *within* each block independently, but leaves the blocks
+    // themselves in their original order and never merges or reorders
+    // across a block boundary -- a performer from one A block can't end up
+    // mixed into a later, separate A block, and blocks aren't interleaved
+    // with each other.
+
+    function shuffleInPlace(arr) {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    }
+
+    function randomizeWithinSegments(list) {
+      const groupLetter = (p) => (p.code || 'A').charAt(0).toUpperCase() || 'A';
+      const result = [];
+      let i = 0;
+      while (i < list.length) {
+        const letter = groupLetter(list[i]);
+        let j = i + 1;
+        while (j < list.length && groupLetter(list[j]) === letter) j++;
+        const segment = list.slice(i, j);
+        shuffleInPlace(segment);
+        result.push(...segment);
+        i = j;
+      }
+      return result;
+    }
+
+    async function handleRandomize() {
+      if (!performers || performers.length === 0) return;
+
+      const authorized = await requireAuthorization();
+      if (!authorized) return;
+
+      performers = randomizeWithinSegments(performers);
+      saveStateToServer();
+      updateDisplays();
+    }
+
+    function updateDisplays() {
+      // No fallback to performers[0] here -- "no one selected" (activeId
+      // null) is a deliberate, valid state the operator can be in, e.g.
+      // right after importing a CSV and before picking who's up first.
+      const active = performers.find(p => p.id === activeId) || null;
+
+      // Render Controller List
+      if (currentScreen === 'controller') {
+        renderControllerList();
+      }
+
+      // Render Empty States if no active performer
+      if (!active) {
+        if (currentScreen === 'judge') {
+          const judgeShabadBlock = document.getElementById('judge-shabad-block');
+          const judgeNameBlock = document.getElementById('judge-name-block');
+          const judgeNameEl = document.getElementById('judge-name');
+          const judgeTablaBlock = document.getElementById('judge-tabla-block');
+          const judgeRaagBlock = document.getElementById('judge-raag-block');
+          const judgeTaalBlock = document.getElementById('judge-taal-block');
+
+          // Participants stays visible with an em dash rather than
+          // disappearing entirely; Tabla Vadak/Shabad/Raag/Taal have
+          // nothing to show at all here, so they hide like the per-field
+          // blank case below.
+          if (judgeNameBlock) judgeNameBlock.classList.remove('hidden');
+          if (judgeNameEl) judgeNameEl.innerText = '—';
+          if (judgeShabadBlock) judgeShabadBlock.classList.add('hidden');
+          if (judgeTablaBlock) judgeTablaBlock.classList.add('hidden');
+          if (judgeRaagBlock) judgeRaagBlock.classList.add('hidden');
+          if (judgeTaalBlock) judgeTaalBlock.classList.add('hidden');
+        }
+
+        if (currentScreen === 'obs') {
+          const obsNameEl = document.getElementById('obs-name');
+          const obsShabad = document.getElementById('obs-shabad');
+          const obsMetaEl = document.getElementById('obs-meta');
+
+          // Name and title just go blank on the broadcast overlay, not a dash.
+          if (obsNameEl) obsNameEl.innerText = '';
+          if (obsShabad) obsShabad.innerHTML = '';
+          if (obsMetaEl) obsMetaEl.classList.add('hidden');
+        }
+        return;
+      }
+
+      const cleanedName = active.name || '—';
+
+      // Render Judge View
+      if (currentScreen === 'judge') {
+        const judgeNameEl = document.getElementById('judge-name');
+        const judgeShabadBlock = document.getElementById('judge-shabad-block');
+        const judgeShabad = document.getElementById('judge-shabad');
+        const judgeNameBlock = document.getElementById('judge-name-block');
+        const judgeTablaBlock = document.getElementById('judge-tabla-block');
+        const judgeTabla = document.getElementById('judge-tabla');
+        const judgeRaagBlock = document.getElementById('judge-raag-block');
+        const judgeRaag = document.getElementById('judge-raag');
+        const judgeTaalBlock = document.getElementById('judge-taal-block');
+        const judgeTaal = document.getElementById('judge-taal');
+
+        // 1. Shabad Title
+        if (isEmptyVal(active.shabad)) {
+          if (judgeShabadBlock) judgeShabadBlock.classList.add('hidden');
+        } else {
+          if (judgeShabadBlock) judgeShabadBlock.classList.remove('hidden');
+          if (judgeShabad) judgeShabad.innerText = active.shabad;
+        }
+
+        // 2. Participants: Each on a new line
+        if (isEmptyVal(cleanedName)) {
+          if (judgeNameBlock) judgeNameBlock.classList.add('hidden');
+        } else {
+          if (judgeNameBlock) judgeNameBlock.classList.remove('hidden');
+          if (judgeNameEl) {
+            const namesArray = cleanedName.split(',').map(n => n.trim());
+            judgeNameEl.innerHTML = namesArray.map(escapeHtml).join('<br>');
+          }
+        }
+
+        // 3. Tabla Vadak (Hidden if blank)
+        if (isEmptyVal(active.tabla)) {
+          if (judgeTablaBlock) judgeTablaBlock.classList.add('hidden');
+        } else {
+          if (judgeTablaBlock) judgeTablaBlock.classList.remove('hidden');
+          if (judgeTabla) judgeTabla.innerText = active.tabla.trim();
+        }
+
+        // 4. Raag (Hidden if blank)
+        if (isEmptyVal(active.raag)) {
+          if (judgeRaagBlock) judgeRaagBlock.classList.add('hidden');
+        } else {
+          if (judgeRaagBlock) judgeRaagBlock.classList.remove('hidden');
+          if (judgeRaag) judgeRaag.innerText = active.raag.trim();
+        }
+
+        // 5. Taal (Hidden if blank)
+        const formattedTaal = formatTaalDisplay(active.taal, active.taalNote);
+        if (!formattedTaal) {
+          if (judgeTaalBlock) judgeTaalBlock.classList.add('hidden');
+        } else {
+          if (judgeTaalBlock) judgeTaalBlock.classList.remove('hidden');
+          if (judgeTaal) judgeTaal.innerText = formattedTaal;
+        }
+      }
+
+      // Render OBS View
+      if (currentScreen === 'obs') {
+        const obsNameEl = document.getElementById('obs-name');
+        const obsShabad = document.getElementById('obs-shabad');
+
+        // Tabla Vadak rides along on the Participants line instead of the
+        // metadata line below -- just another name in the list, comma-joined.
+        const tablaSuffix = isEmptyVal(active.tabla) ? '' : ', ' + active.tabla.trim();
+        const obsNameText = cleanedName + tablaSuffix;
+        if (obsNameEl) {
+          obsNameEl.innerText = obsNameText;
+          obsNameEl.style.fontSize = obsNameText.length > 60 ? '85%' : '';
+        }
+
+        // Computed up front (rather than down in the metadata block below)
+        // because the title-boost logic needs its length too.
+        const formattedTaal = formatTaalDisplay(active.taal, active.taalNote);
+
+        // Format Shabad text -- a short title gets a size boost, but only
+        // when the other two lines are also short enough that boosting the
+        // title won't crowd them out. Three alternative thresholds, any
+        // one qualifies:
+        //   A: title <=80 chars, and both other lines <=40 chars each
+        //   B: title <=120 chars, and both other lines <=32 chars each
+        //   C: title <=60 chars, and both other lines <=75 chars each
+        if (obsShabad) {
+          obsShabad.innerHTML = formatShabadForOBS(active.shabad);
+          const shabadLen = isEmptyVal(active.shabad) ? 0 : active.shabad.trim().length;
+          const participantsLen = obsNameText.length;
+          const taalLen = formattedTaal.length;
+          const qualifiesA = shabadLen > 0 && shabadLen <= 80 && participantsLen <= 40 && taalLen <= 40;
+          const qualifiesB = shabadLen > 0 && shabadLen <= 120 && participantsLen <= 32 && taalLen <= 32;
+          const qualifiesC = shabadLen > 0 && shabadLen <= 60 && participantsLen <= 75 && taalLen <= 75;
+          obsShabad.style.fontSize = (qualifiesA || qualifiesB || qualifiesC) ? '125%' : '';
+        }
+
+        // Metadata line: Raag • Taal, single line, only non-empty parts,
+        // separated by a unicode bullet.
+        const obsMetaEl = document.getElementById('obs-meta');
+        if (obsMetaEl) {
+          const metaParts = [];
+          if (!isEmptyVal(active.raag)) metaParts.push(active.raag.trim());
+          if (formattedTaal) metaParts.push(formattedTaal);
+
+          if (metaParts.length === 0) {
+            obsMetaEl.classList.add('hidden');
+          } else {
+            obsMetaEl.classList.remove('hidden');
+            // Plain spaces collapse to one in normal HTML rendering, so a
+            // real gap needs non-breaking spaces instead.
+            obsMetaEl.innerText = metaParts.join(' '.repeat(4));
+          }
+        }
+      }
+    }
+
+    function renderControllerList() {
+      const listEl = document.getElementById('performers-list');
+      if (!listEl) return;
+
+      if (!performers || performers.length === 0) {
+        listEl.innerHTML = `
+          <div class="text-center py-16 bg-slate-900/40 rounded-2xl border border-dashed border-slate-800 p-6">
+            <svg class="w-[1em] h-[1em] text-4xl text-amber-500/70 mb-3 block mx-auto" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M8 13h2"/><path d="M14 13h2"/><path d="M8 17h2"/><path d="M14 17h2"/></svg>
+            <p class="text-slate-200 font-bold text-base">No Performers Loaded</p>
+            <p class="text-slate-400 text-xs mt-1">Tap the "Import CSV" button above to load your program schedule.</p>
+          </div>
+        `;
+        return;
+      }
+
+      listEl.innerHTML = performers.map(p => {
+        const isLive = p.id === activeId;
+        const isDone = !!p.done;
+        const taalText = formatTaalDisplay(p.taal, p.taalNote);
+        const tablaDisplay = isEmptyVal(p.tabla) ? '—' : p.tabla.trim();
+
+        // Combined "Tabla | Raag | Taal" line -- only include parts that
+        // actually have a value, joined with "|".
+        const metaParts = [`Tabla: ${tablaDisplay}`];
+        if (!isEmptyVal(p.raag)) metaParts.push(p.raag.trim());
+        if (taalText) metaParts.push(taalText);
+        const metaLine = metaParts.map(escapeHtml).join(' | ');
+
+        return `
+          <div id="performer-card-${p.id}"
+               onclick="setActivePerformer('${p.id}')"
+               role="button" tabindex="0"
+               onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();setActivePerformer('${p.id}')}"
+               class="w-full text-left p-4 rounded-xl transition-all border flex items-center justify-between gap-4 cursor-pointer ${
+                 isLive
+                   ? 'bg-amber-500/15 border-amber-500 text-white shadow-lg'
+                   : 'bg-slate-900/80 hover:bg-slate-800/80 border-slate-800 text-slate-300'
+               } ${isDone ? 'opacity-60' : ''}">
+            <div class="flex items-start gap-3 min-w-0 flex-1">
+              <span class="font-black text-sm px-2.5 py-1 rounded-lg flex-shrink-0 ${isLive ? 'bg-amber-500 text-slate-950' : 'bg-slate-800 text-slate-400'}">
+                ${escapeHtml(p.code) || '—'}
+              </span>
+              <div class="min-w-0 flex-1 space-y-0.5">
+                <div class="text-xs text-slate-300 truncate">${escapeHtml(p.shabad) || '—'}</div>
+                <div class="font-bold text-sm text-white truncate">${escapeHtml(p.name)}</div>
+                <div class="text-xs text-slate-300 truncate">${metaLine}</div>
+              </div>
+            </div>
+
+            <button type="button" onclick="event.stopPropagation(); togglePerformerDone('${p.id}')"
+                    class="flex-shrink-0 w-7 h-7 rounded-lg border-2 flex items-center justify-center transition ${
+                      isDone ? 'bg-emerald-500 border-emerald-500' : 'bg-transparent border-slate-600 hover:border-slate-400'
+                    }"
+                    aria-label="${isDone ? 'Mark as not done' : 'Mark as done'}" title="${isDone ? 'Completed' : 'Mark as completed'}">
+              ${isDone ? '<svg class="w-4 h-4 text-slate-950" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>' : ''}
+            </button>
+          </div>
+        `;
+      }).join('');
+
+      scrollActivePerformerIntoView();
+    }
+
+    // Auto-centers the active performer's card on the Controller screen.
+    // Only actually scrolls when something worth re-centering for has
+    // happened since the last scroll -- the active id changed, or the
+    // list order changed (e.g. Randomize moved the active card) -- so a
+    // routine 1s poll that changed nothing doesn't yank the view out from
+    // under someone who's manually scrolled to read the rest of the list.
+    // setScreen() resets lastScrolledSignature when navigating *to*
+    // Controller, so arriving at the screen always re-centers.
+    let lastScrolledSignature;
+    function scrollActivePerformerIntoView() {
+      if (!activeId) return;
+
+      const signature = activeId + '|' + performers.map(p => p.id).join(',');
+      if (signature === lastScrolledSignature) return;
+      lastScrolledSignature = signature;
+
+      const card = document.getElementById('performer-card-' + activeId);
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    function setScreen(screenName) {
+      currentScreen = screenName;
+      updateFileNameHeader();
+
+      document.getElementById('screen-controller')?.classList.add('hidden');
+      document.getElementById('screen-judge')?.classList.add('hidden');
+      document.getElementById('screen-obs')?.classList.add('hidden');
+
+      document.body.classList.remove('mode-obs');
+      document.body.classList.remove('mode-judge');
+      document.body.classList.remove('user-idle');
+      clearTimeout(idleTimer);
+
+      if (screenName === 'controller') {
+        document.getElementById('screen-controller')?.classList.remove('hidden');
+        // Arriving at this screen should always re-center the active
+        // performer, even if nothing has changed since the last visit.
+        lastScrolledSignature = undefined;
+      } else if (screenName === 'judge') {
+        document.getElementById('screen-judge')?.classList.remove('hidden');
+        // Marks the shared header as "in Judge mode" so its own zoom-2x
+        // rule below only kicks in while Judge is the active screen, not
+        // on Controller/OBS too.
+        document.body.classList.add('mode-judge');
+        // Auto-hide just the "Switch Screen" button after idling (header/title stays).
+        resetIdleTimer();
+      } else if (screenName === 'obs') {
+        document.getElementById('screen-obs')?.classList.remove('hidden');
+        document.body.classList.add('mode-obs');
+        // Kick off the auto-hide countdown immediately. Without this, an OBS
+        // Browser Source (no real cursor ever moves) never fires the idle
+        // timer and the controls header stays stuck on screen forever.
+        resetIdleTimer();
+      }
+
+      closeModal('modal-screen');
+      updateDisplays();
+
+      try {
+        if (window.location.protocol !== 'blob:') {
+          const url = new URL(window.location);
+          url.searchParams.set('screen', screenName);
+          window.history.pushState({}, '', url);
+        }
+      } catch (e) {
+        console.warn("URL update skipped in sandbox environment:", e);
+      }
+    }
+
+    function openModal(id) {
+      document.getElementById(id)?.classList.remove('hidden');
+    }
+
+    function closeModal(id) {
+      document.getElementById(id)?.classList.add('hidden');
+    }
+
+    let idleTimer = null;
+    function resetIdleTimer() {
+      document.body.classList.remove('user-idle');
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        if (currentScreen === 'obs' || currentScreen === 'judge') {
+          document.body.classList.add('user-idle');
+        }
+      }, 3000);
+    }
+
+    window.addEventListener('mousemove', resetIdleTimer);
+    window.addEventListener('touchstart', resetIdleTimer);
+
+    window.onload = async function() {
+      await pollState(); // initial load
+      await tryAutoImportCSV(); // only acts if the roster is still empty
+
+      const params = new URLSearchParams(window.location.search);
+      const requestedScreen = params.get('screen');
+
+      if (requestedScreen && ['controller', 'judge', 'obs'].includes(requestedScreen.toLowerCase())) {
+        setScreen(requestedScreen.toLowerCase());
+      } else {
+        setScreen('controller');
+      }
+
+      // Controller, Judge, and OBS may all be different browser
+      // processes (e.g. OBS's embedded browser source) on different
+      // devices, so cross-screen sync happens by polling the server's
+      // saved state rather than same-browser tricks like BroadcastChannel.
+      setInterval(pollState, 1000);
+    };
+  </script>
+</head>
+
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+
+  <!-- GLOBAL FLOATING HEADER -->
+  <!-- header is the positioning context (it's `fixed`) for the absolutely
+       positioned button below, so the title can span the header's full
+       width underneath it instead of stopping short at a flex sibling's
+       reserved space -- opacity-fading the button on idle doesn't remove
+       it from flex layout, so without this the title could never reflow
+       into the space it vacates. -->
+  <header class="fixed top-0 left-0 right-0 z-40 bg-slate-900/90 backdrop-blur border-b border-slate-800/80 px-4 py-3 flex items-center">
+    <div class="flex items-center gap-3 flex-1 min-w-0">
+      <h1 id="current-screen-label" class="text-sm font-bold tracking-tight text-slate-200 truncate">
+        Gurmat Sangeet Broadcast System
+      </h1>
+    </div>
+
+    <button onclick="openModal('modal-screen')" class="autohide-ui absolute right-0 top-1/2 -translate-y-1/2 z-50 bg-slate-800 hover:bg-slate-700 text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-700 transition flex items-center gap-2">
+      <svg class="w-[1em] h-[1em] text-amber-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>
+      <span>Switch Screen</span>
+    </button>
+  </header>
+
+  <!-- MAIN CONTAINER -->
+  <main class="pt-16 pb-6">
+
+    <!-- ================= CONTROLLER SCREEN ================= -->
+    <section id="screen-controller" class="max-w-3xl mx-auto px-4">
+      <div class="flex items-center justify-between mb-6 pt-2">
+        <div class="max-[719px]:hidden">
+          <h2 class="text-xl font-bold text-white">Participant Selector</h2>
+          <p class="text-xs text-slate-400">Tap a performer to make them active across all screens</p>
+        </div>
+
+        <div class="flex items-center gap-2 flex-shrink-0">
+          <button onclick="handleRandomize()" type="button" class="bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs px-4 py-2 rounded-xl border border-slate-700 transition flex items-center gap-2">
+            <svg class="w-[1em] h-[1em]" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 14 4 4-4 4"/><path d="m18 2 4 4-4 4"/><path d="M2 18h1.973a4 4 0 0 0 3.3-1.7l5.454-8.6a4 4 0 0 1 3.3-1.7H22"/><path d="M2 6h1.972a4 4 0 0 1 3.6 2.2"/><path d="M22 18h-6.041a4 4 0 0 1-3.3-1.8l-.359-.45"/></svg>
+            <span>Randomize</span>
+          </button>
+
+          <label class="cursor-pointer bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs px-4 py-2 rounded-xl shadow transition flex items-center gap-2">
+            <svg class="w-[1em] h-[1em]" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M12 12v6"/><path d="m15 15-3-3-3 3"/></svg>
+            <span>Import CSV</span>
+            <input type="file" accept=".csv" onchange="handleCSVImport(event)" class="hidden">
+          </label>
+        </div>
+      </div>
+
+      <div id="performers-list" class="space-y-2">
+        <!-- Rendered dynamically -->
+      </div>
+    </section>
+
+    <!-- ================= JUDGE SCREEN ================= -->
+    <section id="screen-judge" class="hidden max-w-4xl mx-auto px-4 pt-4 space-y-[1.6rem]">
+
+      <!-- Shabad Title Block -->
+      <div id="judge-shabad-block" class="space-y-1">
+        <span class="text-xs font-bold uppercase tracking-wider text-amber-500 max-[719px]:!text-[1.5rem]">Performance Title</span>
+        <div id="judge-shabad" class="text-3xl max-[719px]:!text-[3.75rem] font-bold text-white leading-[1.35]">
+          —
+        </div>
+      </div>
+
+      <!-- Participants Block -->
+      <div id="judge-name-block" class="space-y-1">
+        <span class="text-xs font-bold uppercase tracking-wider text-sky-400 max-[719px]:!text-[1.5rem]">Participants</span>
+        <div id="judge-name" class="text-2xl max-[719px]:!text-[3rem] font-bold text-slate-100 leading-[1.35]">
+          —
+        </div>
+      </div>
+
+      <!-- Tabla Vadak Block (hidden if blank; styled to match the Participants block) -->
+      <div id="judge-tabla-block" class="space-y-1">
+        <span class="text-xs font-bold uppercase tracking-wider text-sky-400 max-[719px]:!text-[1.5rem]">Tabla Vadak</span>
+        <div id="judge-tabla" class="text-2xl max-[719px]:!text-[3rem] font-bold text-slate-100 leading-[1.35]">
+          —
+        </div>
+      </div>
+
+      <!-- Raag Block -->
+      <div id="judge-raag-block" class="space-y-1">
+        <span class="text-xs font-bold uppercase tracking-wider text-amber-500 max-[719px]:!text-[1.5rem]">Raag</span>
+        <div id="judge-raag" class="text-lg max-[719px]:!text-[2.25rem] font-semibold text-slate-200 leading-[1.35]">
+          —
+        </div>
+      </div>
+
+      <!-- Taal Block -->
+      <div id="judge-taal-block" class="space-y-1">
+        <span class="text-xs font-bold uppercase tracking-wider text-amber-500 max-[719px]:!text-[1.5rem]">Taal</span>
+        <div id="judge-taal" class="text-lg max-[719px]:!text-[2.25rem] font-semibold text-slate-200 leading-[1.35]">
+          —
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= OBS SCREEN ================= -->
+    <section id="screen-obs" class="hidden">
+      <!-- Fixed Lower Third Banner. Sized entirely in vh (viewport height)
+           so it takes up the same visual proportion of the frame whether
+           the OBS Browser Source is rendered at 720p, 1080p, or 4K -- a
+           fixed-px height would look shrunk-down at 4K and oversized at
+           720p. Height 10vh, primary text ~2.8vh. -->
+      <!-- text-[2.4vh] here is the base size for all bar content -- name
+           and shabad inherit it directly with no size of their own; the
+           pills below are sized in em relative to it so they scale
+           together if this base ever changes. -->
+      <div class="fixed bottom-0 left-0 right-0 h-[15vh] bg-slate-950 border-t-8 border-amber-500 px-[8vh] py-[1vh] flex items-center justify-between gap-[2vh] z-30 text-[2.4vh]">
+
+        <!-- LEFT COLUMN: Name, Pills (Edge to Edge, Never Truncated) -->
+        <!-- min-w-0 is required here: a flex item's default min-width is
+             "auto" (its content's intrinsic width), which silently
+             overrides max-width and lets a long name list overflow onto
+             one line instead of wrapping. min-w-0 lets max-w-[70%] (and
+             the name's own whitespace-normal) actually take effect. -->
+        <div class="flex items-center gap-[1.5vh] flex-shrink-0 max-w-[70%] min-w-0">
+          <!-- Participant Info & Pills Stack -->
+          <div class="space-y-[1vh] min-w-0">
+            <div id="obs-name" class="font-extrabold text-white leading-tight whitespace-normal"></div>
+
+            <!-- Metadata line: Raag • Taal • Tabla, single line, only
+                 non-empty parts, separated by a unicode bullet. -->
+            <div id="obs-meta" class="hidden text-[.85em] font-semibold text-slate-200 whitespace-nowrap overflow-hidden text-ellipsis"></div>
+          </div>
+        </div>
+
+        <!-- RIGHT COLUMN: Shabad Performance Title (Right-Aligned) -->
+        <div class="text-right min-w-0 flex-1">
+          <div id="obs-shabad" class="text-white font-bold leading-snug space-y-[0.3vh]"></div>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <!-- SCREEN SELECTION MODAL -->
+  <div id="modal-screen" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-2xl">
+      <div class="flex justify-between items-center">
+        <h3 class="font-bold text-base text-white">Select View Screen</h3>
+        <button onclick="closeModal('modal-screen')" class="text-slate-400 hover:text-white text-lg">
+          <svg class="w-[1em] h-[1em]" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+      </div>
+
+      <div class="space-y-2">
+        <button onclick="setScreen('controller')" class="w-full text-left p-3 rounded-xl bg-slate-800 hover:bg-slate-700 transition flex items-center gap-3">
+          <svg class="w-[1em] h-[1em] text-amber-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 5H3"/><path d="M12 19H3"/><path d="M14 3v4"/><path d="M16 17v4"/><path d="M21 12h-9"/><path d="M21 19h-5"/><path d="M21 5h-7"/><path d="M8 10v4"/><path d="M8 12H3"/></svg>
+          <div>
+            <div class="font-bold text-sm text-white">Controller View</div>
+            <div class="text-xs text-slate-400">iPad control panel to pick active performers</div>
+          </div>
+        </button>
+
+        <button onclick="setScreen('judge')" class="w-full text-left p-3 rounded-xl bg-slate-800 hover:bg-slate-700 transition flex items-center gap-3">
+          <svg class="w-[1em] h-[1em] text-sky-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m14 13-8.381 8.38a1 1 0 0 1-3.001-3l8.384-8.381"/><path d="m16 16 6-6"/><path d="m21.5 10.5-8-8"/><path d="m8 8 6-6"/><path d="m8.5 7.5 8 8"/></svg>
+          <div>
+            <div class="font-bold text-sm text-white">Judge View</div>
+            <div class="text-xs text-slate-400">Clean display for judges (supports 25% split view)</div>
+          </div>
+        </button>
+
+        <button onclick="setScreen('obs')" class="w-full text-left p-3 rounded-xl bg-slate-800 hover:bg-slate-700 transition flex items-center gap-3">
+          <svg class="w-[1em] h-[1em] text-emerald-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9"/><path d="M7.8 4.7a6.14 6.14 0 0 0-.8 7.5"/><circle cx="12" cy="9" r="2"/><path d="M16.2 4.8c2 2 2.26 5.11.8 7.47"/><path d="M19.1 1.9a9.96 9.96 0 0 1 0 14.1"/><path d="M9.5 18h5"/><path d="m8 22 4-11 4 11"/></svg>
+          <div>
+            <div class="font-bold text-sm text-white">OBS Overlay View</div>
+            <div class="text-xs text-slate-400">Transparent lower-third banner for live stream</div>
+          </div>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PASSWORD MODAL (Import CSV / Randomize) -->
+  <div id="modal-password" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-2xl">
+      <h3 class="font-bold text-base text-white">Password Required</h3>
+      <p class="text-xs text-slate-400">This changes the program for everyone. Enter the password to continue (leave blank if none has been set).</p>
+      <input id="password-input" type="password" autocomplete="off"
+             class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500"
+             placeholder="Password">
+      <p id="password-error" class="hidden text-xs text-red-400">Incorrect password. Try again.</p>
+      <div class="flex gap-2">
+        <button id="password-cancel" type="button" class="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs px-4 py-2.5 rounded-xl border border-slate-700 transition">Cancel</button>
+        <button id="password-confirm" type="button" class="flex-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs px-4 py-2.5 rounded-xl transition">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

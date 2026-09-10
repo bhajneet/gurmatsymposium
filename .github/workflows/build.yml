@@ -1,0 +1,63 @@
+name: Build and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. v1.2.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate version input
+        run: |
+          version="${{ inputs.version }}"
+          if [ -z "$version" ] || [[ "$version" =~ [[:space:]] ]]; then
+            echo "::error::Version must be non-empty and contain no whitespace (got: '$version')"
+            exit 1
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Download Tailwind CSS standalone CLI
+        run: |
+          curl -sSL -o tools/tailwindcss-v3 \
+            https://github.com/tailwindlabs/tailwindcss/releases/download/v3.4.17/tailwindcss-linux-x64
+          chmod +x tools/tailwindcss-v3
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build (compiles CSS, then cross-compiles all 4 binaries)
+        run: ./tools/build.sh
+
+      - name: Upload binaries as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GurmatSangeet-binaries
+          path: build/*
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ inputs.version }}" \
+            build/GurmatSangeet-macOS-AppleSilicon \
+            build/GurmatSangeet-macOS-Intel \
+            build/GurmatSangeet-Windows-x64.exe \
+            build/GurmatSangeet-Windows-ARM64.exe \
+            --title "${{ inputs.version }}" \
+            --generate-notes

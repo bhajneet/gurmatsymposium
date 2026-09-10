@@ -1,0 +1,20 @@
+# Event roster data (real participant names/ages) -- kept out of git
+# history on purpose; store it elsewhere.
+/csv/
+
+# Compiled binaries and runtime files (state/password are per-install,
+# not source). Rebuild with tools/build.sh; distribute via GitHub Releases.
+/build/
+
+# Standalone Tailwind CLI (~46MB) used only at build time -- re-download
+# with (macOS Apple Silicon; swap the URL suffix for other platforms):
+#   curl -sSL -o tools/tailwindcss-v3 \
+#     https://github.com/tailwindlabs/tailwindcss/releases/download/v3.4.17/tailwindcss-macos-arm64
+#   chmod +x tools/tailwindcss-v3
+/tools/tailwindcss-v3
+
+# macOS Finder metadata
+.DS_Store
+
+# Claude Code local project settings
+.claude/
