@@ -99,6 +99,17 @@
     let currentScreen = 'controller';
     let currentFileName = 'Gurmat Sangeet Broadcast System';
 
+    // Judge-screen-local display preferences (squircle/title visibility,
+    // font size). These are per-device display settings, not shared show
+    // state, so -- unlike performers/activeId below -- they deliberately
+    // never touch the server and reset to defaults on reload.
+    let judgeShowSquircle = true;
+    let judgeShowTitle = true;
+    let judgeFontStep = 0;
+    const JUDGE_FONT_STEP_MIN = -15;
+    const JUDGE_FONT_STEP_MAX = 30;
+    const JUDGE_FONT_STEP_SIZE = 0.05;
+
     // Helper: Check if value is empty, dash, or blank
     function isEmptyVal(val) {
       if (!val) return true;
@@ -472,6 +483,13 @@
       updateDisplays();
     }
 
+    // Deselects the active performer -- Judge and OBS both fall back to
+    // their empty states (already handled in updateDisplays) since they
+    // poll this same server-side activeId.
+    function blankActivePerformer() {
+      setActivePerformer(null);
+    }
+
     function togglePerformerDone(id) {
       const performer = performers.find(p => p.id === id);
       if (!performer) return;
@@ -608,6 +626,7 @@
       // Render Empty States if no active performer
       if (!active) {
         if (currentScreen === 'judge') {
+          const judgeSquircleBlock = document.getElementById('judge-squircle-block');
           const judgeShabadBlock = document.getElementById('judge-shabad-block');
           const judgeNameBlock = document.getElementById('judge-name-block');
           const judgeNameEl = document.getElementById('judge-name');
@@ -616,11 +635,12 @@
           const judgeTaalBlock = document.getElementById('judge-taal-block');
 
           // Participants stays visible with an em dash rather than
-          // disappearing entirely; Tabla Vadak/Shabad/Raag/Taal have
-          // nothing to show at all here, so they hide like the per-field
-          // blank case below.
+          // disappearing entirely; Squircle/Tabla Vadak/Shabad/Raag/Taal
+          // have nothing to show at all here, so they hide like the
+          // per-field blank case below.
           if (judgeNameBlock) judgeNameBlock.classList.remove('hidden');
           if (judgeNameEl) judgeNameEl.innerText = '—';
+          if (judgeSquircleBlock) judgeSquircleBlock.classList.add('hidden');
           if (judgeShabadBlock) judgeShabadBlock.classList.add('hidden');
           if (judgeTablaBlock) judgeTablaBlock.classList.add('hidden');
           if (judgeRaagBlock) judgeRaagBlock.classList.add('hidden');
@@ -644,6 +664,8 @@
 
       // Render Judge View
       if (currentScreen === 'judge') {
+        const judgeSquircleBlock = document.getElementById('judge-squircle-block');
+        const judgeCode = document.getElementById('judge-code');
         const judgeNameEl = document.getElementById('judge-name');
         const judgeShabadBlock = document.getElementById('judge-shabad-block');
         const judgeShabad = document.getElementById('judge-shabad');
@@ -655,8 +677,16 @@
         const judgeTaalBlock = document.getElementById('judge-taal-block');
         const judgeTaal = document.getElementById('judge-taal');
 
-        // 1. Shabad Title
-        if (isEmptyVal(active.shabad)) {
+        // 0. Orange Squircle (performer code) -- toggled from the header controls
+        if (!judgeShowSquircle || isEmptyVal(active.code)) {
+          if (judgeSquircleBlock) judgeSquircleBlock.classList.add('hidden');
+        } else {
+          if (judgeSquircleBlock) judgeSquircleBlock.classList.remove('hidden');
+          if (judgeCode) judgeCode.innerText = active.code;
+        }
+
+        // 1. Shabad Title -- toggled from the header controls
+        if (!judgeShowTitle || isEmptyVal(active.shabad)) {
           if (judgeShabadBlock) judgeShabadBlock.classList.add('hidden');
         } else {
           if (judgeShabadBlock) judgeShabadBlock.classList.remove('hidden');
@@ -846,6 +876,8 @@
       document.getElementById('screen-controller')?.classList.add('hidden');
       document.getElementById('screen-judge')?.classList.add('hidden');
       document.getElementById('screen-obs')?.classList.add('hidden');
+      document.getElementById('judge-header-controls')?.classList.add('hidden');
+      document.getElementById('controller-blank-btn')?.classList.add('hidden');
 
       document.body.classList.remove('mode-obs');
       document.body.classList.remove('mode-judge');
@@ -854,11 +886,13 @@
 
       if (screenName === 'controller') {
         document.getElementById('screen-controller')?.classList.remove('hidden');
+        document.getElementById('controller-blank-btn')?.classList.remove('hidden');
         // Arriving at this screen should always re-center the active
         // performer, even if nothing has changed since the last visit.
         lastScrolledSignature = undefined;
       } else if (screenName === 'judge') {
         document.getElementById('screen-judge')?.classList.remove('hidden');
+        document.getElementById('judge-header-controls')?.classList.remove('hidden');
         // Marks the shared header as "in Judge mode" so its own zoom-2x
         // rule below only kicks in while Judge is the active screen, not
         // on Controller/OBS too.
@@ -894,6 +928,41 @@
 
     function closeModal(id) {
       document.getElementById(id)?.classList.add('hidden');
+    }
+
+    // ---- Judge screen display controls ----
+
+    function setToggleButtonOn(btn, on) {
+      if (!btn) return;
+      btn.classList.toggle('bg-amber-500', on);
+      btn.classList.toggle('border-amber-500', on);
+      btn.classList.toggle('text-slate-950', on);
+      btn.classList.toggle('bg-slate-800', !on);
+      btn.classList.toggle('border-slate-700', !on);
+      btn.classList.toggle('text-slate-400', !on);
+    }
+
+    function toggleJudgeSquircle() {
+      judgeShowSquircle = !judgeShowSquircle;
+      setToggleButtonOn(document.getElementById('judge-toggle-squircle'), judgeShowSquircle);
+      updateDisplays();
+    }
+
+    function toggleJudgeTitle() {
+      judgeShowTitle = !judgeShowTitle;
+      setToggleButtonOn(document.getElementById('judge-toggle-title'), judgeShowTitle);
+      updateDisplays();
+    }
+
+    // Scales the whole Judge screen up/down with `zoom` rather than
+    // resizing individual text elements -- the screen's text sizes are set
+    // in fixed rem values (including an !important mobile override at
+    // <719px), so a single zoom on the container is the only way to grow
+    // "everything" at once without duplicating every size as a CSS variable.
+    function adjustJudgeFontScale(steps) {
+      judgeFontStep = Math.min(JUDGE_FONT_STEP_MAX, Math.max(JUDGE_FONT_STEP_MIN, judgeFontStep + steps));
+      const section = document.getElementById('screen-judge');
+      if (section) section.style.zoom = (1 + judgeFontStep * JUDGE_FONT_STEP_SIZE).toFixed(2);
     }
 
     let idleTimer = null;
@@ -948,10 +1017,35 @@
       </h1>
     </div>
 
-    <button onclick="openModal('modal-screen')" class="autohide-ui absolute right-0 top-1/2 -translate-y-1/2 z-50 bg-slate-800 hover:bg-slate-700 text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-700 transition flex items-center gap-2">
-      <svg class="w-[1em] h-[1em] text-amber-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>
-      <span>Switch Screen</span>
-    </button>
+    <!-- Right-side header cluster: screen-specific controls sit next to the
+         always-present Switch Screen button -- the Blank button only while
+         Controller is active (see setScreen), the Judge display controls
+         (toggle the orange squircle/title on and off, grow/shrink
+         everything on screen) only while Judge is. The whole cluster is
+         absolutely positioned so the title's flex-1 box can still span the
+         header's full width underneath it instead of reserving space for a
+         flex sibling -- fading it on idle doesn't remove it from flex
+         layout, so without this the title could never reflow into the
+         space it vacates. -->
+    <div class="absolute right-0 top-1/2 -translate-y-1/2 z-50 flex items-center gap-2">
+      <button id="controller-blank-btn" onclick="blankActivePerformer()" title="Deselect the active performer -- blanks the Judge and OBS screens" class="hidden autohide-ui bg-slate-800 hover:bg-slate-700 text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-700 transition flex items-center gap-2">
+        <svg class="w-[1em] h-[1em] text-rose-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>
+        <span>Deselect</span>
+      </button>
+
+      <div id="judge-header-controls" class="hidden autohide-ui flex items-center gap-1.5">
+        <button id="judge-toggle-squircle" onclick="toggleJudgeSquircle()" title="Toggle orange squircle" aria-label="Toggle orange squircle" class="w-8 h-8 rounded-lg border-2 flex items-center justify-center font-black text-sm transition bg-amber-500 border-amber-500 text-slate-950">O</button>
+        <button id="judge-toggle-title" onclick="toggleJudgeTitle()" title="Toggle shabad title" aria-label="Toggle shabad title" class="w-8 h-8 rounded-lg border-2 flex items-center justify-center font-black text-sm transition bg-amber-500 border-amber-500 text-slate-950">T</button>
+        <div class="w-px h-5 bg-slate-700 mx-0.5"></div>
+        <button onclick="adjustJudgeFontScale(-1)" title="Decrease font size" aria-label="Decrease font size" class="w-8 h-8 rounded-lg border-2 border-slate-700 bg-slate-800 hover:bg-slate-700 flex items-center justify-center font-black text-base transition">−</button>
+        <button onclick="adjustJudgeFontScale(1)" title="Increase font size" aria-label="Increase font size" class="w-8 h-8 rounded-lg border-2 border-slate-700 bg-slate-800 hover:bg-slate-700 flex items-center justify-center font-black text-base transition">+</button>
+      </div>
+
+      <button onclick="openModal('modal-screen')" class="autohide-ui bg-slate-800 hover:bg-slate-700 text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-700 transition flex items-center gap-2">
+        <svg class="w-[1em] h-[1em] text-amber-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>
+        <span>Switch Screen</span>
+      </button>
+    </div>
   </header>
 
   <!-- MAIN CONTAINER -->
@@ -987,9 +1081,18 @@
     <!-- ================= JUDGE SCREEN ================= -->
     <section id="screen-judge" class="hidden max-w-4xl mx-auto px-4 pt-4 space-y-[1.6rem]">
 
+      <!-- Orange Squircle Block (performer code, e.g. "A1" -- same badge used
+           on the Controller list, just scaled up to match the Judge screen).
+           Toggled on/off from the header controls. -->
+      <div id="judge-squircle-block" class="space-y-1">
+        <span id="judge-code" class="inline-block font-black text-lg px-4 py-2 rounded-xl bg-amber-500 text-slate-950 leading-none max-[719px]:!text-[2.25rem] max-[719px]:!px-6 max-[719px]:!py-3">
+          —
+        </span>
+      </div>
+
       <!-- Shabad Title Block -->
       <div id="judge-shabad-block" class="space-y-1">
-        <span class="text-xs font-bold uppercase tracking-wider text-amber-500 max-[719px]:!text-[1.5rem]">Performance Title</span>
+        <span class="text-xs font-bold uppercase tracking-wider text-amber-500 max-[719px]:!text-[1.5rem]">Title</span>
         <div id="judge-shabad" class="text-3xl max-[719px]:!text-[3.75rem] font-bold text-white leading-[1.35]">
           —
         </div>
