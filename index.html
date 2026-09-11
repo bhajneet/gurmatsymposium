@@ -50,6 +50,88 @@
       background-color: transparent !important;
     }
 
+    /* OBS lower-third reveal/clear/swap. #obs-bar rises up from (and drops
+       back below) the bottom edge -- the amber accent line and the
+       name/title content each animate independently on top of that.
+       Coming in (from blank): the panel rises immediately, the accent
+       draws in behind it, then the content fades up last (layered
+       broadcast build-in) -- durations/delays here are 2x the original
+       fast-build values (380/220/220/240/380ms) for a more deliberate
+       intro. Going out (Deselect): reversed and NOT symmetric -- the
+       accent retracts first, then the content clears, and only once both
+       are gone does the panel slide back down (no fade -- a plain slide
+       reads cleaner once nothing's left on screen to read), at 1.5x the
+       original slide duration (550ms) for a gentler exit. Delays below
+       are set per selector state (".obs-bar-visible" or not), so
+       toggling the same class produces different choreography for "in"
+       vs "out". */
+    #obs-bar {
+      transform: translateY(100%);
+      transition: transform 825ms ease-in-out;
+      transition-delay: 380ms; /* wait for accent+content to clear first */
+    }
+    #obs-bar.obs-bar-visible {
+      transform: translateY(0);
+      transition: transform 760ms cubic-bezier(.16,1,.3,1);
+      transition-delay: 0ms;
+    }
+    #obs-bar .obs-bar-accent {
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: transform 160ms ease-in;
+      transition-delay: 0ms; /* accent goes first */
+    }
+    #obs-bar.obs-bar-visible .obs-bar-accent {
+      transform: scaleX(1);
+      transition: transform 440ms ease-out;
+      transition-delay: 440ms;
+    }
+    #obs-bar .obs-bar-content {
+      opacity: 0;
+      transform: translateY(10px);
+      transition: opacity 200ms ease-in, transform 200ms ease-in;
+      transition-delay: 170ms; /* starts right as the accent finishes */
+    }
+    #obs-bar.obs-bar-visible .obs-bar-content {
+      opacity: 1;
+      transform: translateY(0);
+      transition: opacity 480ms ease-out, transform 480ms ease-out;
+      transition-delay: 760ms;
+    }
+
+    /* Performer swap (Controller selects someone else while the bar is
+       already up): an in-place dip -- accent+content clear, JS swaps the
+       text in while both are fully hidden, then they reveal again -- all
+       without the panel itself moving. Its own pair (not a reuse of the
+       enter/exit rules above, which are paced to cover the panel's own
+       slide) so a swap reads as an "update", not a mini version of the
+       panel sliding away and back. Timings are exactly 3x the original
+       fast-dip values (90/100/70/120/140/90ms) for a gentler swap --
+       keep the JS setTimeout delays in updateDisplays in the same 3:1
+       ratio to match if these change again. */
+    #obs-bar.obs-bar-visible.obs-bar-swap-out .obs-bar-accent {
+      transform: scaleX(0);
+      transition: transform 270ms ease-in;
+      transition-delay: 0ms;
+    }
+    #obs-bar.obs-bar-visible.obs-bar-swap-out .obs-bar-content {
+      opacity: 0;
+      transform: translateY(6px);
+      transition: opacity 300ms ease-in, transform 300ms ease-in;
+      transition-delay: 210ms;
+    }
+    #obs-bar.obs-bar-visible.obs-bar-swap-in .obs-bar-accent {
+      transform: scaleX(1);
+      transition: transform 360ms ease-out;
+      transition-delay: 0ms;
+    }
+    #obs-bar.obs-bar-visible.obs-bar-swap-in .obs-bar-content {
+      opacity: 1;
+      transform: translateY(0);
+      transition: opacity 420ms ease-out, transform 420ms ease-out;
+      transition-delay: 270ms;
+    }
+
     /* On OBS, idle hides the entire header (it's a broadcast overlay). */
     body.mode-obs.user-idle header {
       opacity: 0;
@@ -109,6 +191,19 @@
     const JUDGE_FONT_STEP_MIN = -15;
     const JUDGE_FONT_STEP_MAX = 30;
     const JUDGE_FONT_STEP_SIZE = 0.05;
+
+    // Which performer's info is currently painted into the OBS bar, and
+    // any in-flight swap-dip timers -- lets updateDisplays tell a genuine
+    // show/hide apart from "same bar, different performer" so only the
+    // latter gets the quick in-place swap animation instead of a full
+    // slide out and back in.
+    let obsBarRenderedId = null;
+    let obsSwapTimeouts = [];
+
+    function clearObsSwapTimeouts() {
+      obsSwapTimeouts.forEach(clearTimeout);
+      obsSwapTimeouts = [];
+    }
 
     // Helper: Check if value is empty, dash, or blank
     function isEmptyVal(val) {
@@ -648,14 +743,18 @@
         }
 
         if (currentScreen === 'obs') {
-          const obsNameEl = document.getElementById('obs-name');
-          const obsShabad = document.getElementById('obs-shabad');
-          const obsMetaEl = document.getElementById('obs-meta');
+          const obsBar = document.getElementById('obs-bar');
 
-          // Name and title just go blank on the broadcast overlay, not a dash.
-          if (obsNameEl) obsNameEl.innerText = '';
-          if (obsShabad) obsShabad.innerHTML = '';
-          if (obsMetaEl) obsMetaEl.classList.add('hidden');
+          // Retract the whole lower third (accent, then content, then the
+          // panel itself -- see the obs-bar-* transitions in <head>)
+          // rather than leaving an empty panel on screen. Any in-flight
+          // swap dip is cancelled and its classes dropped so it doesn't
+          // fight with the exit transition; the stale name/title text is
+          // left in place (it's fading out under it) and simply gets
+          // overwritten the next time someone is selected.
+          clearObsSwapTimeouts();
+          if (obsBar) obsBar.classList.remove('obs-bar-visible', 'obs-bar-swap-out', 'obs-bar-swap-in');
+          obsBarRenderedId = null;
         }
         return;
       }
@@ -732,6 +831,15 @@
 
       // Render OBS View
       if (currentScreen === 'obs') {
+        const obsBar = document.getElementById('obs-bar');
+        // A "swap" is a different performer replacing one that's already
+        // on screen -- as opposed to the panel being blank beforehand --
+        // so it gets the quick in-place dip instead of a full slide out
+        // and back in. See the obs-bar-swap-* transitions in <head>.
+        const isSwap = !!(obsBar && obsBar.classList.contains('obs-bar-visible') &&
+          obsBarRenderedId !== null && obsBarRenderedId !== active.id);
+
+        const paintObsBarContent = () => {
         const obsNameEl = document.getElementById('obs-name');
         const obsShabad = document.getElementById('obs-shabad');
 
@@ -782,6 +890,34 @@
             // real gap needs non-breaking spaces instead.
             obsMetaEl.innerText = metaParts.join(' '.repeat(4));
           }
+        }
+
+          obsBarRenderedId = active.id;
+        };
+
+        clearObsSwapTimeouts();
+
+        if (isSwap) {
+          obsBar.classList.remove('obs-bar-swap-in');
+          obsBar.classList.add('obs-bar-swap-out');
+          // Timings here must clear the swap-out transition (accent 270ms,
+          // content 300ms starting at 210ms -- done at 510ms) before the
+          // text swaps and swap-in starts, and the same for swap-in's own
+          // transitions (content done at 270+420=690ms) before it's removed.
+          obsSwapTimeouts.push(setTimeout(() => {
+            paintObsBarContent();
+            obsBar.classList.remove('obs-bar-swap-out');
+            obsBar.classList.add('obs-bar-swap-in');
+            obsSwapTimeouts.push(setTimeout(() => {
+              obsBar.classList.remove('obs-bar-swap-in');
+            }, 720));
+          }, 540));
+        } else {
+          if (obsBar) {
+            obsBar.classList.remove('obs-bar-swap-out', 'obs-bar-swap-in');
+            obsBar.classList.add('obs-bar-visible');
+          }
+          paintObsBarContent();
         }
       }
     }
@@ -1141,31 +1277,43 @@
       <!-- text-[2.4vh] here is the base size for all bar content -- name
            and shabad inherit it directly with no size of their own; the
            pills below are sized in em relative to it so they scale
-           together if this base ever changes. -->
-      <div class="fixed bottom-0 left-0 right-0 h-[15vh] bg-slate-950 border-t-8 border-amber-500 px-[8vh] py-[1vh] flex items-center justify-between gap-[2vh] z-30 text-[2.4vh]">
+           together if this base ever changes.
 
-        <!-- LEFT COLUMN: Name, Pills (Edge to Edge, Never Truncated) -->
-        <!-- min-w-0 is required here: a flex item's default min-width is
-             "auto" (its content's intrinsic width), which silently
-             overrides max-width and lets a long name list overflow onto
-             one line instead of wrapping. min-w-0 lets max-w-[70%] (and
-             the name's own whitespace-normal) actually take effect. -->
-        <div class="flex items-center gap-[1.5vh] flex-shrink-0 max-w-[70%] min-w-0">
-          <!-- Participant Info & Pills Stack -->
-          <div class="space-y-[1vh] min-w-0">
-            <div id="obs-name" class="font-extrabold text-white leading-tight whitespace-normal"></div>
+           #obs-bar itself never moves horizontally/never fades -- it's
+           always parked off-screen (translateY 100%) until the
+           "obs-bar-visible" class lands (see updateDisplays), then rises
+           into place. The amber accent and the name/title content each
+           animate independently on top of that (see the obs-bar-* rules
+           in <head>) so the reveal reads as layered/broadcast-style
+           instead of one flat slide: accent draws in first, content
+           fades up right behind it: reversed and quickened on the way
+           out so "Deselect" reads as a deliberate clear. -->
+      <div id="obs-bar" class="fixed bottom-0 left-0 right-0 h-[15vh] bg-slate-950 pt-2 z-30 text-[2.4vh]">
+        <div class="obs-bar-accent absolute top-0 left-0 right-0 h-2 bg-amber-500"></div>
 
-            <!-- Metadata line: Raag • Taal • Tabla, single line, only
-                 non-empty parts, separated by a unicode bullet. -->
-            <div id="obs-meta" class="hidden text-[.85em] font-semibold text-slate-200 whitespace-nowrap overflow-hidden text-ellipsis"></div>
+        <div class="obs-bar-content h-[calc(100%-0.5rem)] px-[8vh] py-[1vh] flex items-center justify-between gap-[2vh]">
+          <!-- LEFT COLUMN: Name, Pills (Edge to Edge, Never Truncated) -->
+          <!-- min-w-0 is required here: a flex item's default min-width is
+               "auto" (its content's intrinsic width), which silently
+               overrides max-width and lets a long name list overflow onto
+               one line instead of wrapping. min-w-0 lets max-w-[70%] (and
+               the name's own whitespace-normal) actually take effect. -->
+          <div class="flex items-center gap-[1.5vh] flex-shrink-0 max-w-[70%] min-w-0">
+            <!-- Participant Info & Pills Stack -->
+            <div class="space-y-[1vh] min-w-0">
+              <div id="obs-name" class="font-extrabold text-white leading-tight whitespace-normal"></div>
+
+              <!-- Metadata line: Raag • Taal • Tabla, single line, only
+                   non-empty parts, separated by a unicode bullet. -->
+              <div id="obs-meta" class="hidden text-[.85em] font-semibold text-slate-200 whitespace-nowrap overflow-hidden text-ellipsis"></div>
+            </div>
+          </div>
+
+          <!-- RIGHT COLUMN: Shabad Performance Title (Right-Aligned) -->
+          <div class="text-right min-w-0 flex-1">
+            <div id="obs-shabad" class="text-white font-bold leading-snug space-y-[0.3vh]"></div>
           </div>
         </div>
-
-        <!-- RIGHT COLUMN: Shabad Performance Title (Right-Aligned) -->
-        <div class="text-right min-w-0 flex-1">
-          <div id="obs-shabad" class="text-white font-bold leading-snug space-y-[0.3vh]"></div>
-        </div>
-
       </div>
     </section>
 
